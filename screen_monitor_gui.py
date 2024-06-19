@@ -8,19 +8,24 @@ import time
 import threading
 from datetime import datetime
 from ping3 import ping, errors
-import base64
 import os
-from icon import img
+import sys
+import pathlib
 
 class ScreenMonitor:
     def __init__(self, root):
         self.root = root
         self.root.title("Screen Monitor")
-        tmp = open('tmp.ico', 'wb+')
-        tmp.write(base64.b64decode(img))
-        tmp.close()
-        self.root.iconbitmap("tmp.ico")
-        os.remove("tmp.ico")
+        self.root.geometry('1200x800')
+        self.root.iconbitmap(self.get_path("avatars.ico"))
+
+        self.screen_width = root.winfo_screenwidth()
+        self.screen_height = root.winfo_screenheight()
+
+        self.timeFormat = "%Y%m%d%H%M%S"
+        self.screenshot_path = "./screenshots"
+        self.log_path = "./logs"
+        self.logTimeFormat = "%Y%m%d"
 
         self.top = None
         self.canvas = None
@@ -36,10 +41,13 @@ class ScreenMonitor:
         self.resize_height = None
         self.resize_width = None
         self.running = False
+        self.previous_time = None
         self.screenshot_previous = None
+        self.current_time = None
         self.screenshot_current = None
         self.alert_window = None
         self.alert_open = False
+        self.log_expand = False
 
         self.network_health = True
         self.network_timeout = 10
@@ -47,9 +55,8 @@ class ScreenMonitor:
         self.check_network_interval = 1800000
         # self.check_network_interval = 6000
 
-        self.root.geometry('1200x800')
-        # 1000 ms * 60 = 1 min
-        self.screenshot_interval = 1000
+        # 1000 ms * 10 = 10 sec
+        self.screenshot_interval = 10000
 
         # in second
         self.beep_interval = 3
@@ -60,16 +67,49 @@ class ScreenMonitor:
         self.start_stop_button = ttk.Button(root, text="Start", command=self.toggle_loop)
         self.start_stop_button.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
 
+        self.toggle_btn = ttk.Button(root, text="Expand", command=self.toggle_log)
+        self.toggle_btn.grid(row=3, column=0, padx=10, pady=10, sticky='ew')
+        self.export_btn = ttk.Button(root, text="Export", command=self.export)
+        self.export_btn.grid(row=3, column=1, padx=10, pady=10, sticky='ew')
+        
+        # Create a Text widget and a Scrollbar for the log
+        self.text_frame = tk.Frame(root)
+        self.log = tk.Text(self.text_frame, height=10, width=50)
+        self.scroll = tk.Scrollbar(self.text_frame, command=self.log.yview)
+        self.log.configure(yscrollcommand=self.scroll.set)
+        self.log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Initially hide the log area. Span across two columns
+        self.text_frame.grid(row=4, column=0, columnspan=2, sticky='nsew', padx=10, pady=10, ipadx=20, ipady=20)
+        self.text_frame.grid_remove()
+
         # Allow columns to expand
         root.columnconfigure(0, weight=1)
         root.columnconfigure(1, weight=1)
         
         # Allow rows to expand
-        root.rowconfigure(0, weight=1)
-        root.rowconfigure(1, weight=1)
-        root.rowconfigure(2, weight=8)
+        if self.log_expand:
+            root.rowconfigure(0, weight=1)
+            root.rowconfigure(1, weight=1)
+            root.rowconfigure(2, weight=7)
+            root.rowconfigure(3, weight=1)
+            root.rowconfigure(4, weight=4)
+        else:
+            root.rowconfigure(0, weight=1)
+            root.rowconfigure(1, weight=1)
+            root.rowconfigure(2, weight=7)
+            root.rowconfigure(3, weight=1)
         
         self.ping_server_with_retry()
+
+    def get_path(self, relative_path):
+        try:
+            base_path = sys._MEIPASS # path after packaging by pyinstaller
+        except AttributeError:
+            base_path = os.path.abspath(".") # current path
+    
+        return os.path.normpath(os.path.join(base_path, relative_path))
 
     def open_fullscreen(self):
         self.top = tk.Toplevel(self.root)
@@ -95,6 +135,8 @@ class ScreenMonitor:
     def toggle_loop(self):
         if not self.running:
             self.running = True
+            self.screenshot_previous = None
+            self.screenshot_current = None
             self.start_stop_button.config(text="Stop")
             self.capture_loop()
         else:
@@ -105,6 +147,50 @@ class ScreenMonitor:
                 self.display_image(self.screenshot_previous, False)
                 self.alert_window.destroy()
                 self.alert_window = None
+    
+    def toggle_log(self):
+        if self.text_frame.winfo_ismapped():
+            # Hide the text frame and change button text to "Expand"
+            self.text_frame.grid_remove()
+            self.toggle_btn.config(text="Expand")
+            self.log_expand = False
+        else:
+            # Show the text frame and change button text to "Close"
+            self.text_frame.grid()
+            self.toggle_btn.config(text="Close")
+            self.log_expand = True
+
+    def add_log_entry(self, text):
+        self.log.config(state="normal")
+        # Insert the text at the end of the Text widget
+        self.log.insert(tk.END, text + "\n")
+        self.log.config(state="disabled")
+        # Automatically scroll to the end
+        self.log.see(tk.END)
+
+    def export(self):
+        os.makedirs(self.log_path, exist_ok=True)
+        now = datetime.now()
+        log_filename = self.log_path + "/log_" + now.strftime(self.logTimeFormat) + ".txt"
+        pathlib.Path(log_filename).touch(exist_ok=True)
+
+        log_file = open(log_filename, "r")
+        existing_lines = log_file.readlines()
+        existing_lines = {line for line in existing_lines}
+        log_file.close()
+
+        new_content = [line + "\n" for line in self.log.get(1.0, tk.END).split("\n") if line not in existing_lines]
+
+        log_file = open(log_filename, "a")
+        if new_content:
+            log_file.writelines(new_content[:-1])
+        log_file.close()
+    
+    def save_screenshot(self):
+        os.makedirs(self.screenshot_path, exist_ok=True)
+
+        self.screenshot_previous.save(self.screenshot_path + "/sc_"+self.previous_time.strftime(self.timeFormat)+".png")
+        self.screenshot_current.save(self.screenshot_path + "/sc_"+self.current_time.strftime(self.timeFormat)+".png")
 
     def create_alert(self, change_detected_alert: bool):
         if self.alert_open:
@@ -122,17 +208,27 @@ class ScreenMonitor:
             self.alert_window.destroy()
             self.alert_window = None
 
+        def yes_action():
+            self.save_screenshot()
+            on_close()
+
         self.alert_open = True
         self.alert_window = tk.Toplevel(root)
         self.alert_window.title("Alert")
-        self.alert_window.geometry("300x200")
+        self.alert_window.geometry("300x150+" + str(self.screen_width-300) + "+" + str(self.screen_height-200))
         # Make the window stay on top
         self.alert_window.wm_attributes("-topmost", 1)
-        if change_detected_alert:
-            alert_label = tk.Label(self.alert_window, text="Detected Something Changed.\nClose the window to stop.")
-        else:
-            alert_label = tk.Label(self.alert_window, text="Network unhealthy.\nClose the window to stop.")
+        # Set the label text based on the alert type
+        alert_text = "Detected Something Changed." if change_detected_alert else "Network unhealthy."
+        alert_label = tk.Label(self.alert_window, text=alert_text + "\nPress Yes to save screenshot.\nPress No or close window to stop.")
         alert_label.pack(expand=True)
+         # Buttons
+        yes_button = tk.Button(self.alert_window, text="Yes", command=yes_action)
+        yes_button.pack(side=tk.LEFT, expand=True, padx=20, pady=20)
+
+        no_button = tk.Button(self.alert_window, text="No", command=on_close)
+        no_button.pack(side=tk.RIGHT, expand=True, padx=20, pady=20)
+
         self.alert_window.protocol("WM_DELETE_WINDOW", on_close)
 
         threading.Thread(target=beep, daemon=True).start()
@@ -142,20 +238,28 @@ class ScreenMonitor:
             x1, y1 = self.rect_start
             x2, y2 = self.rect_end
             screenshot = pyautogui.screenshot(region=(x1, y1, x2 - x1, y2 - y1))
+            now = datetime.now()
             if self.screenshot_previous:
                 if not np.array_equal(np.array(self.screenshot_previous), np.array(screenshot)):
-                    print(str(datetime.now()) + ": change detected...")
+                    # print(str(now) + ": change detected...")
+                    self.add_log_entry(str(now) + ": change detected...")
+                    # print("There is no changes from", str(self.previous_time),", it has been", round((now - self.previous_time).seconds/60, 2), "mins")
+                    self.add_log_entry("There is no changes from " + str(self.previous_time) + " .It has been " + str(round((now - self.previous_time).seconds/60, 2)) + " mins")
+                    self.current_time = now
                     self.screenshot_current = screenshot
                     self.display_image(screenshot, True)
                     self.create_alert(True)
                     
                     # 更新前一次的截图
+                    self.previous_time = now
                     self.screenshot_previous = screenshot
                 else:
                     if not self.screenshot_current:
+                        self.current_time = now
                         self.screenshot_current = screenshot
                         self.display_image(screenshot, True)
             else:
+                self.previous_time = now
                 self.screenshot_previous = screenshot
                 self.display_image(screenshot, False)
             self.root.after(self.screenshot_interval, self.capture_loop)
@@ -204,24 +308,29 @@ class ScreenMonitor:
 
     def ping_server_with_retry(self, host='www.google.com', retries=3, delay=60):
         attempts = 0
-        print(str(datetime.now()) + ": checking network...")
+        # print(str(datetime.now()) + ": checking network...")
+        self.add_log_entry(str(datetime.now()) + ": checking network...")
         while attempts < retries:
             try:
                 response = ping(host, timeout=self.network_timeout)
                 if not response:
-                    print(f"No response from {host}. Retrying...")
+                    # print(f"No response from {host}. Retrying...")
+                    self.add_log_entry("No response from " + host +". Retrying...")
                 else:
-                    print(f"Response time from {host}: {response} seconds")
+                    # print(f"Response time from {host}: {round(response, 2)} seconds")
+                    self.add_log_entry("Response time from " + host + ": " + str(round(response, 4)) + " seconds")
                     self.network_health = True
                     self.root.after(self.check_network_interval, self.ping_server_with_retry)
                     return
             except errors as e:
-                print(f"Failed to ping {host}: {str(e)}. Retrying...")
+                # print(f"Failed to ping {host}: {str(e)}. Retrying...")
+                self.add_log_entry("Failed to ping " + host +": " + str(e) + ". Retrying...")
 
             attempts += 1
             time.sleep(delay)
 
-        print(f"Failed to ping {host} after {retries} retries.")
+        # print(f"Failed to ping {host} after {retries} retries.")
+        self.add_log_entry("Failed to ping " + host +" after " + str(retries) +" retries.")
         self.create_alert(False)
         self.root.after(self.check_network_interval, self.ping_server_with_retry)
 

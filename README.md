@@ -8,4 +8,4 @@ Using Tkinter to build GUI
 2. Execute screen_monitor_gui.py
 
 ## Packaging
-pyinstaller -F -i avatars.ico screen_monitor_gui.py -p icon.py
+pyinstaller -F -w -i avatars.ico --add-data .\\avatars.ico;. screen_monitor_gui.py

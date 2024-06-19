@@ -1,6 +1,8 @@
 /__pycache__
 /build
 /dist
+/logs
+/screenshots
 
 *.ico
 *.spec
