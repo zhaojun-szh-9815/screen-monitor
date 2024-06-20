@@ -10,7 +10,12 @@ from datetime import datetime
 from ping3 import ping, errors
 import os
 import sys
+import json
+import requests
 import pathlib
+import traceback
+import re
+import webbrowser
 
 class ScreenMonitor:
     def __init__(self, root):
@@ -26,6 +31,10 @@ class ScreenMonitor:
         self.screenshot_path = "./screenshots"
         self.log_path = "./logs"
         self.logTimeFormat = "%Y%m%d"
+        self.version_info_path = "./version-info.json"
+        self.version_key = "version"
+        self.version_url_key = "v-url"
+        self.new_file_url_key = "d-url"
 
         self.top = None
         self.canvas = None
@@ -50,13 +59,14 @@ class ScreenMonitor:
         self.log_expand = False
 
         self.network_health = True
+        # in second
         self.network_timeout = 10
         # 1000 ms * 60 * 30
         self.check_network_interval = 1800000
         # self.check_network_interval = 6000
 
-        # 1000 ms * 10 = 10 sec
-        self.screenshot_interval = 10000
+        # 1000 ms
+        self.screenshot_interval = 1000
 
         # in second
         self.beep_interval = 3
@@ -100,7 +110,8 @@ class ScreenMonitor:
             root.rowconfigure(1, weight=1)
             root.rowconfigure(2, weight=7)
             root.rowconfigure(3, weight=1)
-        
+
+        self.check_version()
         self.ping_server_with_retry()
 
     def get_path(self, relative_path):
@@ -110,6 +121,26 @@ class ScreenMonitor:
             base_path = os.path.abspath(".") # current path
     
         return os.path.normpath(os.path.join(base_path, relative_path))
+    
+    def check_version(self):
+        f = open(self.get_path(self.version_info_path), 'r')
+        data = json.load(f)
+        f.close()
+        version = data[self.version_key]
+        v_url = data[self.version_url_key]
+        d_url = data[self.new_file_url_key]
+        try:
+            response = requests.get(v_url)
+            data = response.json()
+            if version < data[self.version_key]:
+                self.add_log_entry("New version found on: " + d_url)
+                self.tag_urls()
+                self.log.tag_bind("url", "<Button-1>", self.open_url)
+            else:
+                self.add_log_entry("It is the latest version ...")
+        except Exception as e:
+            self.add_log_entry(str(e))
+            self.add_log_entry(traceback.format_exc())
 
     def open_fullscreen(self):
         self.top = tk.Toplevel(self.root)
@@ -130,7 +161,8 @@ class ScreenMonitor:
 
     def on_release(self, event):
         self.rect_end = (event.x, event.y)
-        self.top.destroy()  # Close the overlay after drawing the rectangle
+        # Close the overlay after drawing the rectangle
+        self.top.destroy()
 
     def toggle_loop(self):
         if not self.running:
@@ -141,6 +173,9 @@ class ScreenMonitor:
             self.capture_loop()
         else:
             self.running = False
+            sec = int(self.screenshot_interval / 1000)
+            self.add_log_entry("Stopping in " + str(sec) + " sec ...")
+            time.sleep(sec)
             self.start_stop_button.config(text="Start")
             if self.alert_open and self.alert_window:
                 self.alert_open = False
@@ -189,8 +224,8 @@ class ScreenMonitor:
     def save_screenshot(self):
         os.makedirs(self.screenshot_path, exist_ok=True)
 
-        self.screenshot_previous.save(self.screenshot_path + "/sc_"+self.previous_time.strftime(self.timeFormat)+".png")
-        self.screenshot_current.save(self.screenshot_path + "/sc_"+self.current_time.strftime(self.timeFormat)+".png")
+        self.screenshot_previous.save(self.screenshot_path + "/sc_"+self.previous_time.strftime(self.timeFormat)+"_pre.png")
+        self.screenshot_current.save(self.screenshot_path + "/sc_"+self.current_time.strftime(self.timeFormat)+"_cur.png")
 
     def create_alert(self, change_detected_alert: bool):
         if self.alert_open:
@@ -219,15 +254,17 @@ class ScreenMonitor:
         # Make the window stay on top
         self.alert_window.wm_attributes("-topmost", 1)
         # Set the label text based on the alert type
-        alert_text = "Detected Something Changed." if change_detected_alert else "Network unhealthy."
-        alert_label = tk.Label(self.alert_window, text=alert_text + "\nPress Yes to save screenshot.\nPress No or close window to stop.")
+        alert_text = "Detected Something Changed.""\nPress Yes to save screenshot.\nPress No or close window to stop." if change_detected_alert else "Network unhealthy.\nClose window to stop."
+        alert_label = tk.Label(self.alert_window, text=alert_text)
         alert_label.pack(expand=True)
-         # Buttons
-        yes_button = tk.Button(self.alert_window, text="Yes", command=yes_action)
-        yes_button.pack(side=tk.LEFT, expand=True, padx=20, pady=20)
 
-        no_button = tk.Button(self.alert_window, text="No", command=on_close)
-        no_button.pack(side=tk.RIGHT, expand=True, padx=20, pady=20)
+        if change_detected_alert:
+            # Buttons
+            yes_button = tk.Button(self.alert_window, text="Yes", command=yes_action)
+            yes_button.pack(side=tk.LEFT, expand=True, padx=20, pady=20)
+
+            no_button = tk.Button(self.alert_window, text="No", command=on_close)
+            no_button.pack(side=tk.RIGHT, expand=True, padx=20, pady=20)
 
         self.alert_window.protocol("WM_DELETE_WINDOW", on_close)
 
@@ -250,7 +287,6 @@ class ScreenMonitor:
                     self.display_image(screenshot, True)
                     self.create_alert(True)
                     
-                    # 更新前一次的截图
                     self.previous_time = now
                     self.screenshot_previous = screenshot
                 else:
@@ -306,33 +342,53 @@ class ScreenMonitor:
             self.image_label_previous.image = img
             self.image_label_previous.grid(row=2, column=0, padx=10, pady=10, sticky="ew")
 
-    def ping_server_with_retry(self, host='www.google.com', retries=3, delay=60):
-        attempts = 0
-        # print(str(datetime.now()) + ": checking network...")
+    def ping_server_with_retry(self, host='www.google.com', retries=3, delay=60000, attempt=0):
         self.add_log_entry(str(datetime.now()) + ": checking network...")
-        while attempts < retries:
-            try:
-                response = ping(host, timeout=self.network_timeout)
-                if not response:
-                    # print(f"No response from {host}. Retrying...")
-                    self.add_log_entry("No response from " + host +". Retrying...")
-                else:
-                    # print(f"Response time from {host}: {round(response, 2)} seconds")
-                    self.add_log_entry("Response time from " + host + ": " + str(round(response, 4)) + " seconds")
-                    self.network_health = True
-                    self.root.after(self.check_network_interval, self.ping_server_with_retry)
-                    return
-            except errors as e:
-                # print(f"Failed to ping {host}: {str(e)}. Retrying...")
-                self.add_log_entry("Failed to ping " + host +": " + str(e) + ". Retrying...")
+        
+        try:
+            response = ping(host, timeout=self.network_timeout)
+            if not response:
+                # print(f"No response from {host}. Retrying...")
+                self.add_log_entry("No response from " + host +". Retrying...")
+            else:
+                # print(f"Response time from {host}: {round(response, 2)} seconds")
+                self.add_log_entry("Response time from " + host + ": " + str(round(response, 4)) + " seconds")
+                self.network_health = True
+                self.root.after(self.check_network_interval, self.ping_server_with_retry)
+                return
+        except errors as e:
+            # print(f"Failed to ping {host}: {str(e)}. Retrying...")
+            self.add_log_entry("Failed to ping " + host +": " + str(e) + ". Retrying...")
 
-            attempts += 1
-            time.sleep(delay)
-
+        if attempt == 2:
         # print(f"Failed to ping {host} after {retries} retries.")
-        self.add_log_entry("Failed to ping " + host +" after " + str(retries) +" retries.")
-        self.create_alert(False)
-        self.root.after(self.check_network_interval, self.ping_server_with_retry)
+            self.add_log_entry("Failed to ping " + host +" after " + str(retries) +" retries.")
+            self.create_alert(False)
+            self.root.after(self.check_network_interval, self.ping_server_with_retry)
+        else:
+            self.root.after(delay, lambda:self.ping_server_with_retry(attempt=attempt+1))
+
+    def tag_urls(self):
+        self.log.tag_remove("url", "1.0", tk.END)
+        text_content = self.log.get("1.0", tk.END)
+        for match in re.finditer(r'http[s]?://\S+', text_content):
+            start, end = match.span()
+            start_index = self.log.index(f"1.0 + {start} chars")
+            end_index = self.log.index(f"1.0 + {end} chars")
+            self.log.tag_add("url", start_index, end_index)
+            self.log.tag_config("url", foreground="blue", underline=True)
+
+    def open_url(self, event):
+        # Get the index of the text where the click happened
+        click_index = self.log.index(f"@{event.x},{event.y}")
+        # Get all tags at the click index
+        tags = self.log.tag_names(click_index)
+        # If 'url' tag is among the tags, open the URL
+        if 'url' in tags:
+            # Get the start and end indices of the URL
+            url_start = self.log.tag_prevrange('url', click_index + "+1c")[0]
+            url_end = self.log.tag_prevrange('url', click_index + "+1c")[1]
+            webbrowser.open(self.log.get(url_start, url_end))
 
 if __name__ == "__main__":
     root = tk.Tk()
