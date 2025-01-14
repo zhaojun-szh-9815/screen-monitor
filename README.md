@@ -5,8 +5,8 @@ Using Tkinter to build GUI
 
 ## Functions
 1. Check network health by Ping Google every 30 mins. If connect failed, it will retry after 1 min. If it failed after 3 attempts, it will create an alert.
-2. Detect screen changes in a specific area. The application has "Config" button to specify an area to monitor. The application will create a screenshot every 5 seconds, and if the screenshot is different from the previous one, it will create an alert. The user can press "Yes" button to save screenshots to analyze and debug later.
-3. The alert will be winsound.Beep with 2000ms duration and 3s interval.
+2. Detect screen changes in a specific area. The application has "Monitor Area" button after you click "Config" to specify an area to monitor. The application will create a screenshot every 5 seconds, and if the screenshot is different from the previous one, it will create an alert. The user can press "Yes" button to save screenshots to analyze and debug later.
+3. The default alert will be winsound.Beep with 2000ms duration and 3s interval. And you can choose your alert sound by "Alert sound" button after you click "Config".
 4. Informations about network health and screen changes will be displayed on logging area in the bottom of the window. The content can be stored by "Export" button.
 5. When the application launched, it will check new version, and will display result in logging area.
 
