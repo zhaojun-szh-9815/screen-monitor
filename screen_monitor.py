@@ -1,9 +1,11 @@
 import tkinter as tk
 from tkinter import ttk
+from tkinter import filedialog
 import pyautogui
 from PIL import Image, ImageTk
 import numpy as np
 import winsound
+import pygame
 import time
 import threading
 from datetime import datetime
@@ -35,6 +37,7 @@ class ScreenMonitor:
         self.version_key = "version"
         self.version_url_key = "v-url"
         self.new_file_url_key = "d-url"
+        self.alert_sound_file = ""
 
         self.top = None
         self.canvas = None
@@ -56,7 +59,10 @@ class ScreenMonitor:
         self.screenshot_current = None
         self.alert_window = None
         self.alert_open = False
+        # control thread
+        self.alert_event = threading.Event()
         self.log_expand = False
+        pygame.mixer.init()
 
         self.network_health = True
         # in second
@@ -73,9 +79,19 @@ class ScreenMonitor:
         self.beep_freq = 440
         self.beep_duration = 2000
 
-        ttk.Button(root, text="Config", command=self.open_fullscreen).grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        self.setting_btn = ttk.Button(root, text="Config", command=self.control_setting_options)
+        self.setting_btn.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
         self.start_stop_button = ttk.Button(root, text="Start", command=self.toggle_loop)
         self.start_stop_button.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+
+        # Frame to hold the option buttons
+        self.dropdown_frame = tk.Frame(root, highlightcolor="lightblue")
+
+        monitor_area_btn = ttk.Button(self.dropdown_frame, text="Monitor Area", command=self.open_fullscreen)
+        monitor_area_btn.pack(fill="x", padx=10, pady=10)
+
+        alert_sound_btn = ttk.Button(self.dropdown_frame, text="Alert Sound", command=self.setting_alert_sound)
+        alert_sound_btn.pack(fill="x", padx=10, pady=10)
 
         self.toggle_btn = ttk.Button(root, text="Expand", command=self.toggle_log)
         self.toggle_btn.grid(row=3, column=0, padx=10, pady=10, sticky='ew')
@@ -142,7 +158,22 @@ class ScreenMonitor:
             self.add_log_entry(str(e))
             self.add_log_entry(traceback.format_exc())
 
+    def control_setting_options(self):
+        # Check if options are already displayed
+        if not self.dropdown_frame.winfo_ismapped():
+            # Get the position of the "Click Me" button
+            x = self.setting_btn.winfo_rootx() - root.winfo_rootx()
+            y = self.setting_btn.winfo_rooty() - root.winfo_rooty() + self.setting_btn.winfo_height()
+
+            # Place the dropdown frame just below the button
+            self.dropdown_frame.place(x=x, y=y, width=self.setting_btn.winfo_width())
+            self.dropdown_frame.lift()  # Bring the frame to the top
+        else:
+            self.dropdown_frame.place_forget()  # Hide the options if they are already visible
+
     def open_fullscreen(self):
+        self.control_setting_options()
+
         self.top = tk.Toplevel(self.root)
         self.top.attributes('-fullscreen', True, '-alpha', 0.3)  # Makes the window fullscreen and semi-transparent
         self.canvas = tk.Canvas(self.top, cursor="cross", highlightthickness=0)
@@ -151,6 +182,14 @@ class ScreenMonitor:
         self.canvas.bind("<ButtonPress-1>", self.on_press)
         self.canvas.bind("<B1-Motion>", self.on_motion)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
+
+    def setting_alert_sound(self):
+        self.control_setting_options()
+
+        self.alert_sound_file = filedialog.askopenfilename(
+            title="Choose an alert sound",
+            filetypes=[("MP3 Files", "*.mp3"), ("All Files", "*.*")]
+        )
 
     def on_press(self, event):
         self.rect_start = (event.x, event.y)
@@ -236,8 +275,19 @@ class ScreenMonitor:
                 winsound.Beep(self.beep_freq, self.beep_duration)
                 time.sleep(self.beep_interval)
 
+        def play_sound():
+            if self.alert_sound_file == "":
+                beep()
+            else:
+                pygame.mixer.music.load(self.alert_sound_file)  # Load the sound file
+                pygame.mixer.music.play(-1)  # Play in a loop until stopped
+                while self.alert_open and not self.alert_event.is_set():
+                    threading.Event().wait(0.1)  # Check every 0.1 seconds
+                pygame.mixer.music.stop()  # Stop playing when alert is closed
+
         def on_close():
             self.alert_open = False
+            self.alert_event.set()
             if change_detected_alert:
                 self.display_image(self.screenshot_previous, False)
             self.alert_window.destroy()
@@ -248,6 +298,7 @@ class ScreenMonitor:
             on_close()
 
         self.alert_open = True
+        self.alert_event.clear()
         self.alert_window = tk.Toplevel(root)
         self.alert_window.title("Alert")
         self.alert_window.geometry("300x150+" + str(self.screen_width-300) + "+" + str(self.screen_height-200))
@@ -268,7 +319,7 @@ class ScreenMonitor:
 
         self.alert_window.protocol("WM_DELETE_WINDOW", on_close)
 
-        threading.Thread(target=beep, daemon=True).start()
+        threading.Thread(target=play_sound, daemon=True).start()
 
     def capture_loop(self):
         if self.running and self.rect_start and self.rect_end:

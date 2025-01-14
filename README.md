@@ -17,3 +17,5 @@ Using Tkinter to build GUI
 
 ## Packaging
 pyinstaller -F -w -i avatars.ico --add-data .\\avatars.ico;. --add-data .\\version-info.json;. screen_monitor.py
+or
+pyinstaller -F -w -i avatars.ico --add-data=.\\avatars.ico:. --add-data=.\\version-info.json:. screen_monitor.py
